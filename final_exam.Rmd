@@ -1,0 +1,582 @@
+---
+title: "Final Exam"
+author: "Sean Wendlandt"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#R.Version()
+RNGversion("4.1.2")
+RNGkind("Mersenne-Twister","Inversion","Rejection" )
+
+
+library(MASS)
+library(tidyverse)
+library(leaps)
+library(ggpubr)
+library(GGally)
+library(caret)
+library(glmnet)
+library(corrplot)
+```
+
+## Instructions
+
+Please complete the questions on this template and upload your solutions in a single knitted Word or pdf document. Please also upload your completed template.
+
+In light of the exam context, the data sets for the questions have been generated clearly to satisfy or obviously to violate the requirements of the statistical procedures. If reasonable exploratory analysis is done, there should be little ambiguity as to whether the given data satisfy the requirements. This is unrealistic, but less stressful for students and graders alike. For consistency, the random number generation version is specified in the setup block above.
+
+
+# Question 1, model selection for logistic regression
+
+The data sets "dat1train", "dat1valid", and "dat1test", loaded below, have explanatory variables "x1", "x2",..."x8", and a binary outcome variable, "y".
+
+The data sets "dat1train.mm", "dat1valid.mm", and "dat1test.mm", also loaded below, include the data in "dat1train", "dat1valid", and "dat1test" together with columns for all pairwise interactions of "x1", "x2",..."x8".
+
+The goal is to use the validation set to select a logistic regression model or penalized logistic regression model from among those fit on the training data, then to estimate the generalization error by applying the selected model to predict the outcomes on the test data. 
+
+The parts of this question fit a backward model, a forward model based on AIC, a forward model based on cross-validation, two cross-validated ridge models, and two cross-validated lasso models. 
+
+For these questions, the models, including the models fit using cross-validation, are fit on the training data because the validation data will be used to select among the fitted models.
+
+(10 points each)
+
+```{r}
+load("dat1train.RData")
+load("dat1valid.RData")
+load("dat1test.RData")
+
+load("dat1train_mm.RData")
+load("dat1valid_mm.RData")
+load("dat1test_mm.RData")
+```
+
+## Question 1, part 1
+
+The code below generates a plot of the training error and the validation error for models of "y" based on "x1","x2",..."x8" and their pairwise interactions. The models are fit on subsets of the training data of sizes 350 to 600 by 10's. The error is measured by the mean deviance. Based on these plots, is a training set of size 400 adequate to fit a good model for these data? Please answer yes or no. You may provide an explanation. Is a training set of size 600 adequate to fit a good model for these data? Please answer yes or no. You may provide an explanation.
+
+```{r}
+# function to calculate mean deviance
+dev.mean.get<-function(m.this,dat.this.new){
+  pred<-predict(m.this,dat.this.new,type="response")
+  return(-2*mean(dat.this.new$y*log(pred)+(1-dat.this.new$y)*log(1-pred)))
+}
+
+# formula for "y" in terms of "x1","x2",..."x8" and their pairwise interactions 
+nam<-str_c("x",1:8)
+fmla<-as.formula(str_c("y~(",str_c(nam,collapse = "+"),")^2"))
+
+# sizes of training sets
+size.mat<-matrix(seq(350,nrow(dat1train),by=10),ncol=1)
+
+# function to calculate training and validation mean deviances for the sizes of training set under consideration
+
+dev.by.size.get<-function(sz){
+  m.this<-glm(fmla,data=dat1train[1:sz,],family="binomial")
+  dev.train.this<-dev.mean.get(m.this,dat1train[1:sz,])
+  dev.valid.this<-dev.mean.get(m.this,dat1valid)
+  return(c(dev.train.this,dev.valid.this))
+}
+
+# matrix of training and validation mean deviances for the sizes of training set under consideration
+devs.mat<-apply(size.mat,1,dev.by.size.get)
+
+# data frame of training and validation mean deviances for the sizes of training set under consideration
+dat.devs<-data.frame(t(devs.mat))
+names(dat.devs)<-c("training","validation")
+dat.devs$size.train<-size.mat
+
+# data frame of training and validation mean deviances formatted for plotting
+dat.devs<-pivot_longer(dat.devs,cols=training:validation, 
+                       names_to = "data.set",values_to = "mean.dev")
+ggplot(dat.devs,aes(x=size.train,y=mean.dev,color=data.set))+geom_line()
+```
+
+No, a training set of 400 would not be adequate in this case. Based on the graph above, with 400 samples the model hasn't reached peak optimization as the training and validation data sets are still significantly reducing the deviance distance between the two sets of data.
+
+Yes, a training set size of 600 demonstrates an healthy size of data for this model. As observed in the graph above, the mean deviance between the two data sets are becoming more parallel/horizontal indicating getting closer to a peak in optimization. While you could continue to add data, it is likely you wouldn't see improvement past this. In a real world with limited data, I would argue data sets with a size of 550 would be fine as it also looks to reach this point. This may allow for better (larger) testing/validation data sets as the model is already trained adequately.
+
+## Question 1, part 2
+
+Below, a backward model for "y" based on "x1","x2",..."x8" and their pairwise interactions is fit on "dat1train.mm". This allows for interactions to be retained whether or not the interacting variables are retained. The stopping criterion used is AIC.
+
+The deviance on the training data is verified. Please calculate and display the deviance on the validation set. Please begin the vector of model names and the vector of validation deviances to save the results of parts 2-6 for use in the overall model selection.
+
+```{r}
+
+m2b<-glm(y~.,dat1train.mm,family="binomial")
+
+m.backward<-step(m2b,direction="backward",trace=0)
+summary(m.backward)
+
+dev.get<-function(model.this,dat.this){
+  pred<-predict(model.this,dat.this,type="response")
+  return(-2*sum(dat.this$y*log(pred)+(1-dat.this$y)*log(1-pred)))
+}
+
+dev.get(m.backward,dat1train.mm)
+
+# Calculating deviance on validation set
+validation.dev<-dev.get(m.backward, dat1valid.mm)
+
+# Displaying deviance on validation set
+validation.dev
+
+
+# Please uncomment and run
+model.vec<-c()
+model.vec<-c(model.vec,"backward AIC")
+dev.vec<-c(validation.dev)
+
+
+```
+
+## Question 1, part 3
+
+Below, a forward model for "y" based on "x1","x2",..."x8" and their pairwise interactions is fit on "dat1train.mm" using AIC as a stopping criterion. Please calculate the deviance on the validation set. Please extend the vector of model names and the vector of validation deviances to save these results for use in the overall model selection.
+
+```{r}
+m1<-glm(y~1,data=dat1train.mm,family="binomial")
+fmla.mm<-as.formula(str_c("y~",
+      str_c(names(dat1train.mm)[2:ncol(dat1train.mm)],collapse="+")))
+
+m.forward<-step(m1,scope=fmla.mm,direction="forward",trace=0)
+summary(m.forward)
+
+
+#Calculating validation deviance
+validation.dev<- dev.get(m.forward, dat1valid.mm)
+
+
+model.vec<-c(model.vec, "forward AIC")
+dev.vec<-c(dev.vec,validation.dev)
+```
+
+## Question 1, part 4
+
+Below, a forward model for "y" based on "x1","x2",..."x8" and their pairwise interactions is fit on "dat1train.mm". The stopping criterion used is the optimal model size as indicated by the model size having the minimum cross-validated deviance. 
+
+Please calculate the deviance on the validation set. Please extend the vector of model names and the vector of validation deviances to save these results for use in the overall model selection.
+
+```{r cache=TRUE}
+# create a formula for "y" in terms of sequences of variables in "vars.add"
+
+fmla.add.fnc<-function(i,vars.add){
+  vars.in<-vars.add[1:i]
+  return(as.formula(str_c("y~",str_c(vars.in,collapse="+"))))
+  
+}
+
+# function to calculate validation set deviance
+
+deviance.valid<-function(m,dat.valid){
+  pred.m<-predict(m,dat.valid, type="response")
+-2*sum(dat.valid$y*log(pred.m)+(1-dat.valid$y)*log(1-pred.m))
+}
+
+# Code to extract the variables added in order in a call to "step" with
+# direction equal to "forward"
+
+vars.get<-function(model.forward){
+  vars.add<-model.forward$anova[,1]
+  vars.add<-str_replace(vars.add,"\\+ ","")
+  vars.add[1]<-1
+  return(vars.add)
+}
+
+# function to fit a sequence forward models with scope "fmla.this
+# on the data set "dat.this" and
+# return the deviance for each model on "dat.valid.this".
+
+deviance.get<-function(dat.this,fmla.this,dat.valid.this){
+  m.forward<-step(glm(y~1,data=dat.this,family="binomial"),scope=fmla.this, k=0,direction="forward",trace=0)
+
+# Collect the variables used in the order in which they were added
+vars.add<-vars.get(m.forward)
+  
+# Apply "fmla.add.fnc" to each value of "i". This
+# gives the formulas for the models generated initial sequences of the variables in vars.add
+# Note that the first formula is for the model with just the intercept.
+  
+fmlas<-apply(matrix(1:length(vars.add),ncol=1),1,
+               fmla.add.fnc,vars.add=vars.add)
+  
+# Make a list of models corresponding to these formulas.
+models<-
+  lapply(fmlas,function(x){glm(x,data=dat.this,family="binomial")})
+  
+  return(sapply(models,deviance.valid,dat.valid=dat.valid.this))
+}
+
+# Note the function "createFolds" from "caret" to put
+# an approximately equal proportions of "chd"=1 and "chd"=2 cases 
+# in each fold.
+# Please run this code to check that your function performs as required:
+set.seed(12345678)
+  ind <- createFolds(factor(dat1train.mm$y), k = 10, list = FALSE)
+
+deviance.wrapper<-function(i,dat.w,ind.w,fmla.w){
+  return(deviance.get(dat.w[ind.w!=i,],fmla.w,
+                 dat.w[ind.w==i,]))
+}
+
+deviance.sums.xv<-function(dat.this,fmla.this){
+  ind <- createFolds(factor(dat.this$y), k = 10, list = FALSE)
+  xv.mat<-apply(matrix(1:8,ncol=1),1,deviance.wrapper,dat.w=dat.this,
+        ind.w=ind,
+        fmla.w=fmla.this)
+  return(apply(xv.mat,1,sum))
+}
+
+# Calculate selected model size
+set.seed(12345678)
+fmla.mm<-as.formula(str_c("y~",str_c(names(dat1train.mm)[-1],collapse="+")))
+fwd<-deviance.sums.xv(dat1train.mm,fmla.mm)
+
+(model.size<-which.min(fwd))
+plot(fwd)
+
+forward.model.xv<-step(glm(y~1,data=dat1train.mm,family="binomial"),scope=fmla.mm,
+                    direction="forward",steps=model.size-1,k=0,trace=0)
+summary(forward.model.xv)
+
+## solution 
+#calculating for deviance on validation dataset
+
+validation.dev<-deviance.valid(forward.model.xv, dat1valid.mm)
+model.vec<-c(model.vec, "forward xv")
+dev.vec<-c(dev.vec, validation.dev)
+
+
+```  
+
+In this case, backward selection with stopping based on cross-validation produces the same model as forward selection with stopping based on cross-validation. The code is available on request.
+
+## Question 1, part 5, ridge regression
+
+The code below uses cross-validated ridge regression as in cv.glmnet to fit ridge-penalized linear models of "y" as a function of the remaining variables and their pairwise interactions on the training set. Please report the deviance on the validation set of the model corresponding to "lambda.1se", "lambda.min". Please extend the vector of model names and the vector of validation deviances to save these results for use in the overall model selection.
+
+```{r}
+# Format data for glmnet.
+
+Xtrain<-as.matrix(dat1train.mm[,-1])
+Xvalid<-as.matrix(dat1valid.mm[,-1])
+Xtest<-as.matrix(dat1test.mm[,-1])
+
+ytrain<-dat1train.mm$y
+yvalid<-dat1valid.mm$y
+ytest<-dat1test.mm$y
+
+# Fit ridge-penalized models
+set.seed(5678)
+cvfit = cv.glmnet(x=Xtrain, y=ytrain,alpha=0,family="binomial")
+plot(cvfit)
+cvfit$lambda.min
+cvfit$lambda.1se
+
+# Calculate the mean squared error on the validation data for the "lambda.min" model and the "lambda.1se" model.
+
+cvpred<-predict(cvfit,Xvalid,c(cvfit$lambda.min,cvfit$lambda.1se),type="response")
+
+#model.vec<-c(model.vec,"ridge lambda.min")
+(validation.dev<- 
+    -2*sum(yvalid*log(cvpred[,1])+(1-yvalid)*log(1-cvpred[,1])))
+#dev.vec<-c(dev.vec,validation.dev)
+
+#model.vec<-c(model.vec,"ridge lambda.1se")
+
+# your code here
+#for lambda.min
+pred<-predict(cvfit,Xvalid,c(cvfit$lambda.min),type="response")
+
+dev.this<- -2*sum(yvalid*log(pred)+(1-yvalid)*log(1-pred))
+(dev.vec<-c(dev.vec,dev.this))
+(model.vec<-c(model.vec,"lambda.min"))
+summary(dev.this)
+
+# for lambda.1se
+
+pred1<-predict(cvfit,Xvalid,c(cvfit$lambda.1se),type="response")
+
+dev.this<- -2*sum(yvalid*log(pred1)+(1-yvalid)*log(1-pred1))
+(dev.vec<-c(dev.vec,dev.this))
+(model.vec<-c(model.vec,"lambda.1se"))
+summary(dev.this)
+
+
+
+```
+
+## Question 1, part 6
+
+Please use cross-validated lasso regression as in cv.glmnet to fit lasso-penalized linear models of "y" as a function of the remaining variables and their pairwise interactions on the training set. Please report the deviance on the validation set of the models corresponding to "lambda.1se" and "lambda.min". Please report the number of variables with non-zero coefficients for the models corresponding to "lambda.1se" and "lambda.min". Please extend the vector of model names and the vector of validation deviances to save these results for use in the overall model selection.
+
+```{r}
+set.seed(5678)
+
+#All the code below is mine
+ 
+fit.lasso<-cv.glmnet(x=Xtrain, y=ytrain, alpha=1, family="binomial")
+plot(fit.lasso)
+
+# For lamda.min
+fit.lasso$lambda.min
+# coefficients for the model with lambda equal to "lambda.min"
+(coef.min<-coef(fit.lasso, s = "lambda.min"))
+# names of the variables dropped in this model
+row.names(coef.min)[which(coef.min==0)]
+
+pred<-predict(fit.lasso,Xvalid,c(fit.lasso$lambda.min),type="response")
+dev.this<- -2*sum(yvalid*log(pred)+(1-yvalid)*log(1-pred))
+(dev.vec<-c(dev.vec,dev.this))
+(model.vec<-c(model.vec,"lasso.lambda.min"))
+
+
+# For lamda.1se
+fit.lasso$lambda.1se
+# coefficients for the model with lambda equal to "lambda.1se"
+(coef.min<-coef(fit.lasso, s = "lambda.1se"))
+# names of the variables dropped in this model
+row.names(coef.min)[which(coef.min==0)]
+
+pred<-predict(fit.lasso,Xvalid,c(fit.lasso$lambda.1se),type="response")
+dev.this<- -2*sum(yvalid*log(pred)+(1-yvalid)*log(1-pred))
+(dev.vec<-c(dev.vec,dev.this))
+(model.vec<-c(model.vec,"lasso.lambda.1se"))
+```
+
+The number of non-zero coefficients in the lamda.min model is 18 including the intercept. In the lambda.1se model there are 6 including the intercept.
+
+Note that the number of variables under consideration is too large for a basic use of best subsets.
+
+
+## Question 1, part 7
+
+Of the backward model fit by AIC (part 2), the forward model fit by AIC (part 3), the forward model fit by cross-validation (part 4), the lambda.min and the lambda.1se ridge models (part 5), and the lambda.min and the lambda.1se lasso models (part 6), which model has the best deviance on the validation set? Please show the summary of the model fit on the combined training and validation sets using the variables, or the lambda in the case of penalized regression, that produced the selected model. What is the deviance of this new fitted model on the test set?
+
+```{r}
+small.dev<-which(dev.vec==min(dev.vec))
+
+model.vec[small.dev] #forward xv model has the best deviance on the validation set (part 4)
+
+#fit model on combined training and validation sets
+dat1tv.mm<-bind_rows(dat1train.mm,dat1valid.mm)
+
+forward.model.xv.test<-step(glm(y~1,data=dat1tv.mm,family="binomial"),scope=fmla.mm,
+                    direction="forward",steps=model.size-1,k=0,trace=0)
+summary(forward.model.xv.test)
+
+#Finding the MSE for forward xv model
+mean(forward.model.xv.test$residuals^2) #5.473023
+
+```
+
+Based on our model results displayed above, the best performing model is the forward xv model based on lowest deviance. The MSE for the model is 5.473023 after being fit on training and validation data sets.
+
+Note: the plot above to assess the adequacy of the size of the training set has the drawback that an appearance of stability of the deviances for large subsets may be due in part to the fact that the larger models are based on data sets with many points in common. This plot is a good follow-up now that the test data has been used for its intended purpose.
+
+```{r}
+temp<-bind_rows(dat1train,dat1test)
+size.mat<-matrix(seq(350,nrow(temp),by=10),ncol=1)
+dev.by.size.get<-function(sz){
+  #dat.sz<-temp[sample(1:nrow(temp),sz),]
+  #m.this<-glm(fmla,data=dat.sz,family="binomial")
+  #dev.train.this<-dev.mean.get(m.this,dat.sz)
+  m.this<-glm(fmla,data=temp[1:sz,],family="binomial")
+  dev.train.this<-dev.mean.get(m.this,temp[1:sz,])
+  dev.valid.this<-dev.mean.get(m.this,dat1valid)
+  return(c(dev.train.this,dev.valid.this))
+}
+
+devs.mat<-apply(size.mat,1,dev.by.size.get)
+
+dat.devs<-data.frame(t(devs.mat))
+names(dat.devs)<-c("training","validation")
+dat.devs$size.train<-size.mat
+
+dat.devs<-pivot_longer(dat.devs,cols=training:validation, 
+                       names_to = "data.set",values_to = "mean.dev")
+ggplot(dat.devs,aes(x=size.train,y=mean.dev,color=data.set))+geom_line()
+```
+
+# Question 2, logistic regression
+
+The code below generates a logistic regression model for the outcome variable "y".
+
+
+```{r eval=FALSE}
+dat1tv.mm<-bind_rows(dat1train.mm,dat1valid.mm)
+m<-glm(y~x1+x4+x5.x6+x8,dat1tv.mm,family = "binomial")
+
+```
+
+## Question 2, part 1
+
+(5 points)
+
+Please report the p-value for the Hosmer-Lemeshow test with 10 bins applied to this model.
+
+Please report the p-value for the Le Cessie - van Houwelingen test with default parameters applied to this model.
+
+Please comment on meaning of these tests regarding the validity of the model.
+
+```{r echo}
+library(ResourceSelection)# for Hosmer-Lemeshow
+library(rms)# for Le Cessie - van Houwelingen
+
+#Hosmer-Lemeshow test
+m<-glm(y~x1+x4+x5.x6+x8,dat1tv.mm,family = "binomial")
+hoslem.test(m$y, fitted(m), g=10)
+
+#Le Cessie - van Houwelingen test
+
+m2<-lrm(y~x1+x4+x5.x6+x8,x=TRUE,y=TRUE,data=dat1tv.mm)
+m2
+resid(m2, 'gof')  # the type 'gof' gives the Le Cessie - van Houwelingen
+                  # fit statistic and probability
+                
+
+
+
+```
+Both of these tests are measuring the goodness of fit for the logistic regression model. From the tests performed, the Hosmer-Lemeshow returns a p-value of .06789 indicating it is a good fit (a value below .05 indicating a poor fit). In the Le Cessie - Van Houwelingen test, we get a p-value of .36097 which also indicates a good fit.
+
+## Question 2, part 2
+
+(5 points)
+
+Please report the deviance, confusion matrix, accuracy, precision (proportion of correctly predicted 1's among the cases predicted to be 1's by the model), recall (proportion of correctly predicted 1's among cases with outcome equal to 1), and F1 (2(recall)(precision)/ (recall + precision)) for this model fitted on the combined training and validation data then applied to the test data, "dat1test.mm". 
+
+#### The test deviance
+
+```{r}
+anova(m,test="Chisq")
+```
+
+#### Confusion matrix
+
+```{r}
+probs<-predict(m, dat1test.mm,type="response")
+pred<-probs>=.5
+(confus.mat<-table(dat1test.mm$y,pred))
+```
+
+#### Accuracy:
+
+```{r}
+(accuracy<-sum(diag(confus.mat))/sum(confus.mat))
+```
+
+#### Precision:
+
+```{r}
+#below two lines for reference
+#dat1tv.mm<-bind_rows(dat1train.mm,dat1valid.mm)
+#m<-glm(y~x1+x4+x5.x6+x8,dat1tv.mm,family = "binomial")
+(precision<-confus.mat[2,2]/sum(confus.mat[,2]))
+```
+
+#### Recall:
+
+```{r}
+recall<-(confus.mat[2,2]/sum(confus.mat[2,]))
+
+```
+
+#### F1:
+
+```{r}
+(2*recall*precision/(recall+precision))
+```
+
+# Question 3, count data
+
+(10 points)
+
+In "dat3", loaded below,the values of "y" represent counts of occurrences of a phenomenon. Which model(s) seem most suited to predicting "y" from "x" among Poisson regression, quasipoisson regression, negative binomial regression,and linear regression? Please explain your reasoning on the basis of the data, summaries of the models, and other simple diagnostics you choose.
+
+#### Poisson
+
+```{r}
+load("dat3.RData")
+
+output.p <-glm(formula = y ~ x, data = dat3, family = poisson)
+(summary(output.p))
+### optional supplementary diagnostics ###
+par(mfrow=c(2,2))
+plot(output.p)
+par(mfrow=c(1,1))
+
+```
+
+
+
+#### Quasipoisson
+
+```{r}
+output.qp <-glm(formula = y ~ x, data = dat3, family = quasipoisson())
+(summary(output.qp))
+### optional supplementary diagnostics ###
+par(mfrow=c(2,2))
+plot(output.qp)
+par(mfrow=c(1,1))
+
+```
+
+#### Negative binomial
+
+Note that the standard deviation for the negative binomial is $\sqrt{\mu+\frac{\mu^2}{\theta}}$.
+
+```{r}
+library(MASS)
+output.nb<- glm.nb(formula = y ~ x, data = dat3)
+summary(output.nb)
+### optional supplementary diagnostics ###
+par(mfrow=c(2,2))
+plot(output.nb)
+par(mfrow=c(1,1))
+
+```
+
+#### Linear regression
+
+```{r}
+
+output.l<- lm(y ~ x, data = dat3)
+summary(output.l)
+### supplementary diagnostics ###
+par(mfrow=c(2,2))
+plot(output.l)
+par(mfrow=c(1,1))
+
+```
+
+From our model results, the Poisson model has the lowest p-values. However, our data distribution is skewed which would invalidate many of these models including the Poisson. Because of this, the Negative Binomial is the best model as this model is able to handle these skewed cases. Thus we can make inferences from it's output. Since it has a intercept p-value of 0.000185 *** it indicates a good fit. 
+
+
+# Question 4
+
+(10 points)
+
+The data frame "dat4" loaded below represents the number of incidents, "incidents" at facilities of different sizes,"exposure", with different ratings, "rating". A negative binomial model for "incidents" is fit below using log(exposure) as an offset and "rating" as an explanatory variable. Please fit a Poisson and a quasipoisson model for "incidents" using log(exposure) as an offset and "rating" as an explanatory variable. Which model provides the best information regarding these data? 
+
+
+```{r}
+
+load("dat4.RData")
+
+m.nb<-glm.nb(incidents~rating,offset(log(exposure)),data=dat4)
+summary(m.nb)
+
+m.p<-glm(incidents ~ rating, offset(log(exposure)), data = dat4, family = poisson)
+summary(m.p)
+
+m.qp<-glm(incidents ~ rating, offset(log(exposure)), data = dat4, family = quasipoisson())
+summary(m.qp)
+```
+Of the models above, the best is the poisson model as it has the lowest Std. Error out of the models while having comparable p-values. This indicates there is less variance around the fit.
+
